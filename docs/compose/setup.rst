@@ -41,7 +41,7 @@ values:
 .. note::
 
   When using *Letsencrypt!* you have to make sure that the DNS ``A`` and ``AAAA`` records for the
-  all hostnames mentioned in the ``HOSTNAMES`` variable match with the ip adresses of you server.
+  all hostnames mentioned in the ``HOSTNAMES`` variable match with the ip addresses of you server.
   Or else certificate generation will fail! See also: :ref:`dns_setup`.
 
 Bind address
@@ -65,7 +65,8 @@ You can find those addresses by running the following:
           TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
 
 If the address is not configured directly (NAT) on any of the network interfaces or if
-you would simply like the server to listen on all interfaces, use ``0.0.0.0`` and ``::``. Note that running is this mode is not supported and can lead to `issues`_.
+you would simply like the server to listen on all interfaces, use ``0.0.0.0`` and ``::``. 
+Note that running in this mode is not supported and can lead to `issues`_.
 
 .. _issues: https://github.com/Mailu/Mailu/issues/641
 
@@ -94,20 +95,20 @@ You may now start Mailu. Move the to the Mailu directory and run:
 
 .. code-block:: bash
 
-  docker-compose up -d
+  docker compose up -d
 
 Finally, you need an admin user account. 
 
 You can have the system create it automatically:
-use the environment variables ``INITIAL_ACCOUNT*`` as described in :ref:`admin_account`
-You should set ``INITIAL_ADMIN_MODE`` also to either ``update`` or ``ifmissing``. Leaving it with the default value could cause errors when restarting the system.  
+use the environment variables ``INITIAL_ADMIN_*`` as described in :ref:`admin_account`
 
 Else, if you don't go with the automatic way, you need to manually create the admin account now:
 
 .. code-block:: bash
 
-  docker-compose exec admin flask mailu admin me example.net 'password'
+  docker compose exec admin flask mailu admin me example.net 'password'
 
-This will create a user named ``me@example.net`` with password ``password`` and administration privileges. Connect to the Web admin interface and change the password to a strong one.
+This will create a user named ``me@example.net`` with password ``password`` and administration privileges.
+Connect to the Web admin interface and change the password to a strong one.
 
   .. note:: It is vitally important that either a user with the same email as ``POSTMASTER`` in your ``mailu.env`` exists, or you remember to create an alias with this name after you log in. All kinds of strange errors will occur as a result of not doing so!

@@ -1,21 +1,18 @@
-ARG DISTRO=alpine:3.14.2
-FROM $DISTRO
+# syntax=docker/dockerfile-upstream:1.4.3
 
-# python3 shared with most images
-RUN apk add --no-cache \
-    python3 py3-pip bash \
-  && pip3 install --upgrade pip
+# webdav image
+FROM base
 
-# Image specific layers under this line
-RUN apk add --no-cache curl \
- && pip3 install radicale~=3.0
+ARG VERSION=local
+LABEL version=$VERSION
 
+COPY radicale.conf /
 
-COPY radicale.conf /radicale.conf
+RUN echo $VERSION >/version
 
-EXPOSE 5232/tcp
+#EXPOSE 5232/tcp
+HEALTHCHECK CMD ["/bin/sh", "-c", "ps ax | grep [/]radicale.conf"]
+
 VOLUME ["/data"]
 
 CMD radicale -S -C /radicale.conf
-
-HEALTHCHECK CMD curl -f -L http://localhost:5232/ || exit 1

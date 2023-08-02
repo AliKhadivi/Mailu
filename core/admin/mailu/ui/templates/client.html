@@ -17,11 +17,11 @@
     </tr>
     <tr>
       <th>{% trans %}TCP port{% endtrans %}</th>
-      <td>{{ "143" if config["TLS_FLAVOR"] == "notls" else "993 (TLS) or 143 (STARTTLS)" }}</td>
+      <td>{{ "143" if config["TLS_FLAVOR"] == "notls" else "993 (TLS)" }}</td>
     </tr>
     <tr>
       <th>{% trans %}Server name{% endtrans %}</th>
-      <td><pre class="pre-config border bg-light">{{ config["HOSTNAMES"] }}</pre></td>
+      <td><pre class="pre-config border bg-light">{{ config["HOSTNAME"] }}</pre></td>
     </tr>
     <tr>
       <th>{% trans %}Username{% endtrans %}</th>
@@ -42,11 +42,11 @@
     </tr>
     <tr>
       <th>{% trans %}TCP port{% endtrans %}</th>
-      <td>{{ "25" if config["TLS_FLAVOR"] == "notls" else "465 (TLS) or 587 (STARTTLS)" }}</td>
+      <td>{{ "25" if config["TLS_FLAVOR"] == "notls" else "465 (TLS)" }}</td>
     </tr>
     <tr>
       <th>{% trans %}Server name{% endtrans %}</th>
-      <td><pre class="pre-config border bg-light">{{ config["HOSTNAMES"] }}</pre></td>
+      <td><pre class="pre-config border bg-light">{{ config["HOSTNAME"] }}</pre></td>
     </tr>
     <tr>
       <th>{% trans %}Username{% endtrans %}</th>
@@ -58,4 +58,8 @@
     </tr>
   </tbody>
 {%- endcall %}
+<blockquote>
+  {% trans %}If you use an Apple device,{% endtrans %}
+  <a href="/apple.mobileconfig">{% trans %}click here to autoconfigure it.{% endtrans %}</a>
+</blockquote>
 {%- endblock %}

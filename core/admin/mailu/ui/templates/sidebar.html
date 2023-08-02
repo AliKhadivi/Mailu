@@ -1,11 +1,11 @@
 <div class="sidebar text-sm">
   {%- if current_user.is_authenticated %}
-  <div class="user-panel mt-3 pb-3 mb-3 d-flex">
+  <div class="user-panel mt-3 pb-3 mb-3 d-flex" title="{{ current_user }}">
     <div class="image">
       <div class="div-circle elevation-2"><i class="fa fa-user text-lg text-dark"></i></div>
     </div>
     <div class="info">
-      <a href="{{ url_for('.user_settings') }}" class="d-block">{{ current_user }}</a>
+      <a href="{{ url_for('.user_settings') }}" class="d-block">{{ current_user.displayed_name or current_user }}</a>
     </div>
   </div>
   {%- endif %}
@@ -20,7 +20,7 @@
         </a>
       </li>
       <li class="nav-item" role="none">
-        <a href="{{ url_for('.user_password') }}" class="nav-link" role="menuitem">
+        <a href="{{ url_for('.user_password_change') }}" class="nav-link" role="menuitem">
           <i class="nav-icon fa fa-lock"></i>
           <p>{% trans %}Update password{% endtrans %}</p>
         </a>
@@ -31,12 +31,14 @@
           <p>{% trans %}Auto-reply{% endtrans %}</p>
         </a>
       </li>
+      {%- if config["FETCHMAIL_ENABLED"] %}
       <li class="nav-item" role="none">
         <a href="{{ url_for('.fetch_list') }}" class="nav-link" role="menuitem">
           <i class="nav-icon fas fa-download"></i>
           <p>{% trans %}Fetched accounts{% endtrans %}</p>
         </a>
       </li>
+      {%- endif %}
       <li class="nav-item" role="none">
         <a href="{{ url_for('.token_list') }}" class="nav-link" role="menuitem">
           <i class="nav-icon fas fa-ticket-alt"></i>
@@ -92,11 +94,11 @@
       {%- endif %}
 
       <li class="nav-header text-uppercase text-primary" role="none">{% trans %}Go to{% endtrans %}</li>
-      {%- if config["WEBMAIL"] != "none" %}
+      {%- if config["WEBMAIL"] != "none" and current_user.is_authenticated %}
       <li class="nav-item" role="none">
-        <a href="{{ config["WEB_WEBMAIL"] }}" target="_blank" class="nav-link" role="menuitem">
+        <a href="{{ config["WEB_WEBMAIL"] }}" class="nav-link" role="menuitem">
         <i class="nav-icon far fa-envelope"></i>
-        <p>{% trans %}Webmail{% endtrans %} <i class="fas fa-external-link-alt text-xs"></i></p>
+        <p>{% trans %}Webmail{% endtrans %}</p>
         </a>
       </li>
       {%- endif %}
@@ -130,14 +132,14 @@
       {%- endif %}
       {%- if current_user.is_authenticated %}
       <li class="nav-item" role="none">
-        <a href="{{ url_for('.logout') }}" class="nav-link" role="menuitem">
+        <a href="{{ url_for('sso.logout') }}" class="nav-link" role="menuitem">
           <i class="nav-icon fas fa-sign-out-alt"></i>
           <p>{% trans %}Sign out{% endtrans %}</p>
         </a>
       </li>
-      {%- else %}
+      {% else %}
       <li class="nav-item" role="none">
-        <a href="{{ url_for('.login') }}" class="nav-link" role="menuitem">
+        <a href="{{ url_for('sso.login') }}" class="nav-link" role="menuitem">
           <i class="nav-icon fas fa-sign-in-alt"></i>
           <p>{% trans %}Sign in{% endtrans %}</p>
         </a>

@@ -1,19 +1,21 @@
-ARG DISTRO=alpine:3.14.2
-FROM $DISTRO
+# syntax=docker/dockerfile-upstream:1.4.3
 
-RUN mkdir -p /app
-WORKDIR /app
+# setup image
+FROM base
 
-COPY requirements.txt requirements.txt
-RUN apk add --no-cache curl python3 py3-pip \
-    && pip3 install -r requirements.txt
+ARG VERSION=local
+LABEL version=$VERSION
 
-COPY server.py ./server.py
-COPY main.py ./main.py
 COPY flavors /data/flavors
 COPY templates /data/templates
 COPY static ./static
+COPY server.py ./server.py
+COPY main.py ./main.py
+
+RUN echo $VERSION >> /version
 
 EXPOSE 80/tcp
+HEALTHCHECK --start-period=350s CMD curl -skfLo /dev/null http://localhost/
+USER mailu
 
 CMD gunicorn -w 4 -b :80 --access-logfile - --error-logfile - --preload main:app

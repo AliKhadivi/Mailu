@@ -119,7 +119,7 @@ def password(localpart, domain_name, password):
     """ Change the password of an user
     """
     email = f'{localpart}@{domain_name}'
-    user   = models.User.query.get(email)
+    user  = models.User.query.get(email)
     if user:
         user.set_password(password)
     else:
@@ -207,7 +207,7 @@ def config_update(verbose=False, delete_objects=False):
                             'enable_imap', 'enable_pop', 'forward_enabled',
                             'forward_destination', 'reply_enabled',
                             'reply_subject', 'reply_body', 'displayed_name',
-                            'spam_enabled', 'email', 'spam_threshold')
+                            'spam_enabled', 'spam_mark_as_read', 'email', 'spam_threshold')
     for user_config in users:
         if verbose:
             print(str(user_config))
@@ -304,6 +304,7 @@ def config_update(verbose=False, delete_objects=False):
                 if verbose:
                     print(f'Deleting domain: {domain.name}')
                 db.session.delete(domain)
+
     db.session.commit()
 
 
@@ -351,7 +352,7 @@ def config_import(verbose=0, secrets=False, debug=False, quiet=False, color=Fals
             raise click.ClickException(msg) from exc
         raise
 
-    # don't commit when running dry
+    # do not commit when running dry
     if dry_run:
         log.changes('Dry run. Not committing changes.')
         db.session.rollback()
@@ -385,6 +386,7 @@ def config_export(full=False, secrets=False, color=False, dns=False, output=None
         'dns': dns,
     }
 
+    old_umask = os.umask(0o077)
     try:
         schema = MailuSchema(only=only, context=context)
         if as_json:
@@ -396,17 +398,22 @@ def config_export(full=False, secrets=False, color=False, dns=False, output=None
         if msg := log.format_exception(exc):
             raise click.ClickException(msg) from exc
         raise
+    finally:
+        os.umask(old_umask)
 
 
 @mailu.command()
 @click.argument('email')
+@click.option('-r', '--really', is_flag=True)
 @with_appcontext
-def user_delete(email):
-    """delete user"""
-    user = models.User.query.get(email)
-    if user:
-        db.session.delete(user)
-    db.session.commit()
+def user_delete(email, really=False):
+    """disable or delete user"""
+    if user := models.User.query.get(email):
+        if really:
+            db.session.delete(user)
+        else:
+            user.enabled = False
+        db.session.commit()
 
 
 @mailu.command()
@@ -414,10 +421,9 @@ def user_delete(email):
 @with_appcontext
 def alias_delete(email):
     """delete alias"""
-    alias = models.Alias.query.get(email)
-    if alias:
+    if alias := models.Alias.query.get(email):
         db.session.delete(alias)
-    db.session.commit()
+        db.session.commit()
 
 
 @mailu.command()

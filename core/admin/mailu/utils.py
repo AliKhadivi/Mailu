@@ -6,69 +6,96 @@ try:
 except ImportError:
     import pickle
 
-import dns
 import dns.resolver
+import dns.exception
+import dns.flags
+import dns.rdtypes
+import dns.rdatatype
+import dns.rdataclass
 
 import hmac
 import secrets
+import string
 import time
 
 from multiprocessing import Value
-
 from mailu import limiter
+from flask import current_app as app
 
 import flask
 import flask_login
 import flask_migrate
 import flask_babel
+import ipaddress
 import redis
 
+from datetime import datetime, timedelta
 from flask.sessions import SessionMixin, SessionInterface
 from itsdangerous.encoding import want_bytes
 from werkzeug.datastructures import CallbackDict
-from werkzeug.contrib import fixers
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Login configuration
 login = flask_login.LoginManager()
-login.login_view = "ui.login"
+login.login_view = "sso.login"
 
 @login.unauthorized_handler
 def handle_needs_login():
     """ redirect unauthorized requests to login page """
     return flask.redirect(
-        flask.url_for('ui.login', next=flask.request.endpoint)
+        flask.url_for('sso.login', url=flask.request.url)
     )
 
 # DNS stub configured to do DNSSEC enabled queries
 resolver = dns.resolver.Resolver()
-resolver.use_edns(0, 0, 1232)
+resolver.use_edns(0, dns.flags.DO, 1232)
 resolver.flags = dns.flags.AD | dns.flags.RD
 
 def has_dane_record(domain, timeout=10):
     try:
-        result = resolver.query(f'_25._tcp.{domain}', dns.rdatatype.TLSA,dns.rdataclass.IN, lifetime=timeout)
+        result = resolver.resolve(f'_25._tcp.{domain}', dns.rdatatype.TLSA,dns.rdataclass.IN, lifetime=timeout)
         if result.response.flags & dns.flags.AD:
             for record in result:
                 if isinstance(record, dns.rdtypes.ANY.TLSA.TLSA):
-                    record.validate()
                     if record.usage in [2,3] and record.selector in [0,1] and record.mtype in [0,1,2]:
                         return True
     except dns.resolver.NoNameservers:
         # If the DNSSEC data is invalid and the DNS resolver is DNSSEC enabled
         # we will receive this non-specific exception. The safe behaviour is to
         # accept to defer the email.
-        flask.current_app.logger.warn(f'Unable to lookup the TLSA record for {domain}. Is the DNSSEC zone okay on https://dnsviz.net/d/{domain}/dnssec/?')
-        return flask.current_app.config['DEFER_ON_TLS_ERROR']
+        app.logger.warn(f'Unable to lookup the TLSA record for {domain}. Is the DNSSEC zone okay on https://dnsviz.net/d/{domain}/dnssec/?')
+        return app.config['DEFER_ON_TLS_ERROR']
     except dns.exception.Timeout:
-        flask.current_app.logger.warn(f'Timeout while resolving the TLSA record for {domain} ({timeout}s).')
-    except dns.resolver.NXDOMAIN:
+        app.logger.warn(f'Timeout while resolving the TLSA record for {domain} ({timeout}s).')
+    except (dns.resolver.NXDOMAIN, dns.name.EmptyLabel):
         pass # this is expected, not TLSA record is fine
     except Exception as e:
-        flask.current_app.logger.error(f'Error while looking up the TLSA record for {domain} {e}')
+        app.logger.info(f'Error while looking up the TLSA record for {domain} {e}')
         pass
 
 # Rate limiter
 limiter = limiter.LimitWraperFactory()
+
+def extract_network_from_ip(ip):
+    n = ipaddress.ip_network(ip)
+    if n.version == 4:
+        return str(n.supernet(prefixlen_diff=(32-app.config["AUTH_RATELIMIT_IP_V4_MASK"])).network_address)
+    else:
+        return str(n.supernet(prefixlen_diff=(128-app.config["AUTH_RATELIMIT_IP_V6_MASK"])).network_address)
+
+def is_exempt_from_ratelimits(ip):
+    ip = ipaddress.ip_address(ip)
+    return any(ip in cidr for cidr in app.config['AUTH_RATELIMIT_EXEMPTION'])
+
+def is_ip_in_subnet(ip, subnets=[]):
+    if isinstance(subnets, str):
+        subnets = [subnets]
+    ip = ipaddress.ip_address(ip)
+    try:
+        return any(ip in cidr for cidr in [ipaddress.ip_network(subnet, strict=False) for subnet in subnets])
+    except:
+        app.logger.debug(f'Unable to parse {subnets!r}, assuming {ip!r} is not in the set')
+        return False
 
 # Application translation
 babel = flask_babel.Babel()
@@ -76,9 +103,11 @@ babel = flask_babel.Babel()
 @babel.localeselector
 def get_locale():
     """ selects locale for translation """
+    if not app.config['SESSION_COOKIE_NAME'] in flask.request.cookies:
+        return flask.request.accept_languages.best_match(app.config.translations.keys())
     language = flask.session.get('language')
-    if not language in flask.current_app.config.translations:
-        language = flask.request.accept_languages.best_match(flask.current_app.config.translations.keys())
+    if not language in app.config.translations:
+        language = flask.request.accept_languages.best_match(app.config.translations.keys())
         flask.session['language'] = language
     return language
 
@@ -90,13 +119,10 @@ class PrefixMiddleware(object):
         self.app = None
 
     def __call__(self, environ, start_response):
-        prefix = environ.get('HTTP_X_FORWARDED_PREFIX', '')
-        if prefix:
-            environ['SCRIPT_NAME'] = prefix
         return self.app(environ, start_response)
 
     def init_app(self, app):
-        self.app = fixers.ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+        self.app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
         app.wsgi_app = self
 
 proxy = PrefixMiddleware()
@@ -105,12 +131,9 @@ proxy = PrefixMiddleware()
 # Data migrate
 migrate = flask_migrate.Migrate()
 
-
 # session store (inspired by https://github.com/mbr/flask-kvsession)
 class RedisStore:
     """ Stores session data in a redis db. """
-
-    has_ttl = True
 
     def __init__(self, redisstore):
         self.redis = redisstore
@@ -142,8 +165,6 @@ class RedisStore:
 class DictStore:
     """ Stores session data in a python dict. """
 
-    has_ttl = False
-
     def __init__(self):
         self.dict = {}
 
@@ -151,7 +172,7 @@ class DictStore:
         """ load item from store. """
         return self.dict[key]
 
-    def put(self, key, value, ttl_secs=None):
+    def put(self, key, value, ttl=None):
         """ save item to store. """
         self.dict[key] = value
 
@@ -220,7 +241,6 @@ class MailuSession(CallbackDict, SessionMixin):
 
     def destroy(self):
         """ destroy session for security reasons. """
-
         self.delete()
 
         self._uid = None
@@ -234,33 +254,34 @@ class MailuSession(CallbackDict, SessionMixin):
 
     def regenerate(self):
         """ generate new id for session to avoid `session fixation`. """
-
-        self.delete()
-
+        self.delete(clear_token=False)
         self._sid = None
-        self._created = self.app.session_config.gen_created()
-
         self.modified = True
 
-    def delete(self):
+    def delete(self, clear_token=True):
         """ Delete stored session. """
         if self.saved:
+            if clear_token and 'webmail_token' in self:
+                self.app.session_store.delete(self['webmail_token'])
             self.app.session_store.delete(self._key)
             self._key = None
 
     def save(self):
         """ Save session to store. """
-
         set_cookie = False
-
         # set uid from dict data
         if self._uid is None:
-            self._uid = self.app.session_config.gen_uid(self.get('user_id', ''))
+            self._uid = self.app.session_config.gen_uid(self.get('_user_id', ''))
 
         # create new session id for new or regenerated sessions and force setting the cookie
         if self._sid is None:
             self._sid = self.app.session_config.gen_sid()
             set_cookie = True
+            if 'webmail_token' in self:
+                self.app.session_store.put(self['webmail_token'],
+                        self.sid,
+                        self.app.config['PERMANENT_SESSION_LIFETIME'],
+                )
 
         # get new session key
         key = self.sid
@@ -269,14 +290,11 @@ class MailuSession(CallbackDict, SessionMixin):
         if key != self._key:
             self.delete()
 
-        # remember time to refresh
-        self['_refresh'] = int(time.time()) + self.app.permanent_session_lifetime.total_seconds()/2
-
         # save session
         self.app.session_store.put(
             key,
             pickle.dumps(dict(self)),
-            self.app.permanent_session_lifetime.total_seconds()
+            app.config['SESSION_TIMEOUT'],
         )
 
         self._key = key
@@ -286,18 +304,13 @@ class MailuSession(CallbackDict, SessionMixin):
 
         return set_cookie
 
-    def needs_refresh(self):
-        """ Checks if server side session needs to be refreshed. """
-
-        return int(time.time()) > self.get('_refresh', 0)
-
 class MailuSessionConfig:
     """ Stores sessions crypto config """
 
     # default size of session key parts
     uid_bits = 64 # default if SESSION_KEY_BITS is not set in config
     sid_bits = 128 # for now. must be multiple of 8!
-    time_bits = 32 # for now. must be multiple of 8!
+    time_bits = 32 # for now. must be multiple of 8!  
 
     def __init__(self, app=None):
 
@@ -335,8 +348,11 @@ class MailuSessionConfig:
         """ Generate base64 representation of creation time. """
         return self._encode(int(now or time.time()).to_bytes(8, byteorder='big').lstrip(b'\0'))
 
-    def parse_key(self, key, app=None, validate=False, now=None):
+    def parse_key(self, key, app=None, now=None):
         """ Split key into sid, uid and creation time. """
+
+        if app is None:
+            app = flask.current_app
 
         if not (isinstance(key, bytes) and self._key_min <= len(key) <= self._key_max):
             return None
@@ -350,13 +366,12 @@ class MailuSessionConfig:
         if created is None or self._decode(uid) is None or self._decode(sid) is None:
             return None
 
-        # validate creation time when requested or store does not support ttl
-        if validate or not app.session_store.has_ttl:
-            if now is None:
-                now = int(time.time())
-            created = int.from_bytes(created, byteorder='big')
-            if not created < now < created + app.permanent_session_lifetime.total_seconds():
-                return None
+        # validate creation time
+        if now is None:
+            now = int(time.time())
+        created = int.from_bytes(created, byteorder='big')
+        if not created <= now <= created + app.config['PERMANENT_SESSION_LIFETIME']:
+            return None
 
         return (uid, sid, crt)
 
@@ -395,23 +410,12 @@ class MailuSessionInterface(SessionInterface):
         if session.accessed:
             response.vary.add('Cookie')
 
-        set_cookie = session.permanent and app.config['SESSION_REFRESH_EACH_REQUEST']
-        need_refresh = session.needs_refresh()
-
-        # save modified session or refresh unmodified session
-        if session.modified or need_refresh:
-            set_cookie |= session.save()
-
-        # set cookie on refreshed permanent sessions
-        if need_refresh and session.permanent:
-            set_cookie = True
-
-        # set or update cookie if necessary
-        if set_cookie:
+        # save session and update cookie if necessary
+        if session.save():
             response.set_cookie(
                 app.session_cookie_name,
                 session.sid,
-                expires=self.get_expiration_time(app, session),
+                expires=datetime.now()+timedelta(seconds=app.config['PERMANENT_SESSION_LIFETIME']),
                 httponly=self.get_cookie_httponly(app),
                 domain=self.get_cookie_domain(app),
                 path=self.get_cookie_path(app),
@@ -431,7 +435,16 @@ class MailuSessionExtension:
 
         count = 0
         for key in app.session_store.list():
-            if not app.session_config.parse_key(key, app, validate=True, now=now):
+            if key.startswith(b'token-'):
+                if sessid := app.session_store.get(key):
+                    if not app.session_config.parse_key(sessid, app, now=now):
+                        app.session_store.delete(sessid)
+                        app.session_store.delete(key)
+                        count += 1
+                else:
+                    app.session_store.delete(key)
+                    count += 1
+            elif not app.session_config.parse_key(key, app, now=now):
                 app.session_store.delete(key)
                 count += 1
 
@@ -451,7 +464,7 @@ class MailuSessionExtension:
 
         count = 0
         for key in app.session_store.list(prefix):
-            if key not in keep:
+            if key not in keep and not key.startswith(b'token-'):
                 app.session_store.delete(key)
                 count += 1
 
@@ -470,12 +483,12 @@ class MailuSessionExtension:
                 redis.StrictRedis().from_url(app.config['SESSION_STORAGE_URL'])
             )
 
-            # clean expired sessions oonce on first use in case lifetime was changed
+            # clean expired sessions once on first use in case lifetime was changed
             def cleaner():
                 with cleaned.get_lock():
                     if not cleaned.value:
                         cleaned.value = True
-                        flask.current_app.logger.info('cleaning session store')
+                        app.logger.info('cleaning session store')
                         MailuSessionExtension.cleanup_sessions(app)
 
             app.before_first_request(cleaner)
@@ -485,3 +498,52 @@ class MailuSessionExtension:
 
 cleaned = Value('i', False)
 session = MailuSessionExtension()
+
+# this is used by the webmail to authenticate IMAP/SMTP
+def verify_temp_token(email, token):
+    try:
+        if token.startswith('token-'):
+            if sessid := app.session_store.get(token):
+                session = MailuSession(sessid, app)
+                if session.get('_user_id', '') == email:
+                    return True
+    except:
+        pass
+
+def gen_temp_token(email, session):
+    token = session.get('webmail_token', 'token-'+secrets.token_urlsafe())
+    session['webmail_token'] = token
+    app.session_store.put(token,
+            session.sid,
+            app.config['PERMANENT_SESSION_LIFETIME'],
+    )
+    return token
+
+def isBadOrPwned(form):
+    try:
+        if len(form.pw.data) < 8:
+            return "This password is too short."
+        breaches = int(form.pwned.data)
+    except ValueError:
+        breaches = -1
+    if breaches > 0:
+        return f"This password appears in {breaches} data breaches! It is not unique; please change it."
+    return None
+
+def formatCSVField(field):
+    if not field.data:
+        return
+    if isinstance(field.data,str):
+        data = field.data.replace(" ","").split(",")
+    else:
+        data = field.data
+    field.data = ", ".join(data)
+
+# All tokens are 32 characters hex lowercase
+def is_app_token(candidate):
+    if len(candidate) == 32 and all(c in string.hexdigits[:-6] for c in candidate):
+        return True
+    return False
+
+def truncated_pw_hash(pw):
+    return hmac.new(app.truncated_pw_key, bytearray(pw, 'utf-8'), 'sha256').hexdigest()[:6]

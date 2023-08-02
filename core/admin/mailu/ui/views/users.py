@@ -1,4 +1,4 @@
-from mailu import models
+from mailu import models, utils
 from mailu.ui import ui, access, forms
 from flask import current_app as app
 
@@ -24,10 +24,17 @@ def user_create(domain_name):
             flask.url_for('.user_list', domain_name=domain.name))
     form = forms.UserForm()
     form.pw.validators = [wtforms.validators.DataRequired()]
+    form.quota_bytes.default = app.config['DEFAULT_QUOTA']
     if domain.max_quota_bytes:
         form.quota_bytes.validators = [
             wtforms.validators.NumberRange(max=domain.max_quota_bytes)]
+        if form.quota_bytes.default > domain.max_quota_bytes:
+            form.quota_bytes.default = domain.max_quota_bytes
     if form.validate_on_submit():
+        if msg := utils.isBadOrPwned(form):
+            flask.flash(msg, "error")
+            return flask.render_template('user/create.html',
+                domain=domain, form=form)
         if domain.has_email(form.localpart.data):
             flask.flash('Email is already used', 'error')
         else:
@@ -40,6 +47,7 @@ def user_create(domain_name):
             flask.flash('User %s created' % user)
             return flask.redirect(
                 flask.url_for('.user_list', domain_name=domain.name))
+    form.process()
     return flask.render_template('user/create.html',
         domain=domain, form=form)
 
@@ -60,6 +68,11 @@ def user_edit(user_email):
         form.quota_bytes.validators = [
             wtforms.validators.NumberRange(max=max_quota_bytes)]
     if form.validate_on_submit():
+        if form.pw.data:
+            if msg := utils.isBadOrPwned(form):
+                flask.flash(msg, "error")
+                return flask.render_template('user/edit.html', form=form, user=user,
+                    domain=user.domain, max_quota_bytes=max_quota_bytes)
         form.populate_obj(user)
         if form.pw.data:
             user.set_password(form.pw.data)
@@ -71,19 +84,6 @@ def user_edit(user_email):
         domain=user.domain, max_quota_bytes=max_quota_bytes)
 
 
-@ui.route('/user/delete/<path:user_email>', methods=['GET', 'POST'])
-@access.domain_admin(models.User, 'user_email')
-@access.confirmation_required("delete {user_email}")
-def user_delete(user_email):
-    user = models.User.query.get(user_email) or flask.abort(404)
-    domain = user.domain
-    models.db.session.delete(user)
-    models.db.session.commit()
-    flask.flash('User %s deleted' % user)
-    return flask.redirect(
-        flask.url_for('.user_list', domain_name=domain.name))
-
-
 @ui.route('/user/settings', methods=['GET', 'POST'], defaults={'user_email': None})
 @ui.route('/user/usersettings/<path:user_email>', methods=['GET', 'POST'])
 @access.owner(models.User, 'user_email')
@@ -91,11 +91,7 @@ def user_settings(user_email):
     user_email_or_current = user_email or flask_login.current_user.email
     user = models.User.query.get(user_email_or_current) or flask.abort(404)
     form = forms.UserSettingsForm(obj=user)
-    if isinstance(form.forward_destination.data,str):
-        data = form.forward_destination.data.replace(" ","").split(",")
-    else:
-        data = form.forward_destination.data
-    form.forward_destination.data = ", ".join(data)
+    utils.formatCSVField(form.forward_destination)
     if form.validate_on_submit():
         form.forward_destination.data = form.forward_destination.data.replace(" ","").split(",")
         form.populate_obj(user)
@@ -107,18 +103,16 @@ def user_settings(user_email):
                 flask.url_for('.user_list', domain_name=user.domain.name))
     return flask.render_template('user/settings.html', form=form, user=user)
 
-
-@ui.route('/user/password', methods=['GET', 'POST'], defaults={'user_email': None})
-@ui.route('/user/password/<path:user_email>', methods=['GET', 'POST'])
-@access.owner(models.User, 'user_email')
-def user_password(user_email):
+def _process_password_change(form, user_email):
     user_email_or_current = user_email or flask_login.current_user.email
     user = models.User.query.get(user_email_or_current) or flask.abort(404)
-    form = forms.UserPasswordForm()
     if form.validate_on_submit():
         if form.pw.data != form.pw2.data:
             flask.flash('Passwords do not match', 'error')
-        else:
+        elif user_email or models.User.login(user_email_or_current, form.current_pw.data):
+            if msg := utils.isBadOrPwned(form):
+                flask.flash(msg, "error")
+                return flask.render_template('user/password.html', form=form, user=user)
             flask.session.regenerate()
             user.set_password(form.pw.data)
             models.db.session.commit()
@@ -126,8 +120,19 @@ def user_password(user_email):
             if user_email:
                 return flask.redirect(flask.url_for('.user_list',
                     domain_name=user.domain.name))
+        else:
+            flask.flash('Wrong current password', 'error')
     return flask.render_template('user/password.html', form=form, user=user)
 
+@ui.route('/user/password', methods=['GET', 'POST'], defaults={'user_email': None})
+@access.owner(models.User, 'user_email')
+def user_password_change(user_email):
+    return _process_password_change(forms.UserPasswordChangeForm(), user_email)
+
+@ui.route('/user/password/<path:user_email>', methods=['GET', 'POST'])
+@access.domain_admin(models.User, 'user_email')
+def user_password(user_email):
+    return _process_password_change(forms.UserPasswordForm(), user_email)
 
 @ui.route('/user/reply', methods=['GET', 'POST'], defaults={'user_email': None})
 @ui.route('/user/reply/<path:user_email>', methods=['GET', 'POST'])
@@ -167,9 +172,12 @@ def user_signup(domain_name=None):
         form = forms.UserSignupFormCaptcha()
 
     if form.validate_on_submit():
-        if domain.has_email(form.localpart.data):
+        if domain.has_email(form.localpart.data) or models.Alias.resolve(form.localpart.data, domain_name):
             flask.flash('Email is already used', 'error')
         else:
+            if msg := utils.isBadOrPwned(form):
+                flask.flash(msg, "error")
+                return flask.render_template('user/signup.html', domain=domain, form=form)
             flask.session.regenerate()
             user = models.User(domain=domain)
             form.populate_obj(user)

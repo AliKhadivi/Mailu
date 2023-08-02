@@ -1,26 +1,24 @@
-ARG DISTRO=alpine:3.14.2
-FROM $DISTRO
-# python3 shared with most images
-RUN apk add --no-cache \
-    python3 py3-pip git bash py3-multidict \
-  && pip3 install --upgrade pip
+# syntax=docker/dockerfile-upstream:1.4.3
 
-# Shared layer between nginx, dovecot, postfix, postgresql, rspamd, unbound, rainloop, roundcube
-RUN pip3 install socrate==0.2.0
+# resolver image
+FROM base
 
-# Image specific layers under this line
-RUN apk add --no-cache unbound curl bind-tools \
-  && curl -o /etc/unbound/root.hints https://www.internic.net/domain/named.cache \
-  && chown root:unbound /etc/unbound \
-  && chmod 775 /etc/unbound \
-  && apk del --no-cache curl \
-  && /usr/sbin/unbound-anchor -a /etc/unbound/trusted-key.key | true
+ARG VERSION=local
+LABEL version=$VERSION
 
-COPY start.py /start.py
-COPY unbound.conf /unbound.conf
+RUN set -euxo pipefail \
+  ; apk add --no-cache bind-tools unbound \
+  ; curl -so /etc/unbound/root.hints https://www.internic.net/domain/named.cache \
+  ; chown root:unbound /etc/unbound \
+  ; chmod 775 /etc/unbound \
+  ; /usr/sbin/unbound-anchor -a /etc/unbound/trusted-key.key || true
 
-EXPOSE 53/udp 53/tcp
+COPY unbound.conf /
+COPY start.py /
+
+RUN echo $VERSION >/version
+
+#EXPOSE 53/udp 53/tcp
+HEALTHCHECK CMD dig @127.0.0.1 || exit 1
 
 CMD /start.py
-
-HEALTHCHECK CMD dig @127.0.0.1 || exit 1

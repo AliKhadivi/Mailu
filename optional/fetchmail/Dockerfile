@@ -1,17 +1,19 @@
-ARG DISTRO=alpine:3.14.2
-FROM $DISTRO
+# syntax=docker/dockerfile-upstream:1.4.3
 
-# python3 shared with most images
-RUN apk add --no-cache \
-    python3 py3-pip bash \
-  && pip3 install --upgrade pip
+# fetchmail image
+FROM base
 
-# Image specific layers under this line
-RUN apk add --no-cache fetchmail ca-certificates openssl \
- && pip3 install requests
+ARG VERSION=local
+LABEL version=$VERSION
 
-COPY fetchmail.py /fetchmail.py
+RUN set -euxo pipefail \
+  ; apk add --no-cache fetchmail openssl \
+  ; mkdir -p /data
 
-USER fetchmail
+COPY fetchmail.py /
+
+RUN echo $VERSION >/version
+
+HEALTHCHECK --start-period=350s CMD ["/bin/sh", "-c", "ps ax | grep [/]fetchmail.py"]
 
 CMD ["/fetchmail.py"]

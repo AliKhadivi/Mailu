@@ -5,6 +5,7 @@ from flask import current_app as app
 import flask
 import idna
 import re
+import sqlalchemy.exc
 import srslib
 
 @internal.route("/postfix/dane/<domain_name>")
@@ -32,8 +33,9 @@ def postfix_alias_map(alias):
     localpart, domain_name = models.Email.resolve_domain(alias)
     if localpart is None:
         return flask.jsonify(domain_name)
-    destination = models.Email.resolve_destination(localpart, domain_name)
-    return flask.jsonify(",".join(destination)) if destination else flask.abort(404)
+    if destinations := models.Email.resolve_destination(localpart, domain_name):
+        return flask.jsonify(",".join(idna_encode(destinations)))
+    return flask.abort(404)
 
 @internal.route("/postfix/transport/<path:email>")
 def postfix_transport(email):
@@ -108,7 +110,7 @@ def postfix_recipient_map(recipient):
 
     This is meant for bounces to go back to the original sender.
     """
-    srs = srslib.SRS(flask.current_app.config["SECRET_KEY"])
+    srs = srslib.SRS(flask.current_app.srs_key)
     if srslib.SRS.is_srs_address(recipient):
         try:
             return flask.jsonify(srs.reverse(recipient))
@@ -123,7 +125,9 @@ def postfix_sender_map(sender):
 
     This is for bounces to come back the reverse path properly.
     """
-    srs = srslib.SRS(flask.current_app.config["SECRET_KEY"])
+    if sender.count('@') > 1 or sender.startswith('"'):
+        return flask.abort(404)
+    srs = srslib.SRS(flask.current_app.srs_key)
     domain = flask.current_app.config["DOMAIN"]
     try:
         localpart, domain_name = models.Email.resolve_domain(sender)
@@ -140,33 +144,27 @@ def postfix_sender_login(sender):
     localpart, domain_name = models.Email.resolve_domain(sender)
     if localpart is None:
         return flask.jsonify(",".join(wildcard_senders)) if wildcard_senders else flask.abort(404)
-    destination = models.Email.resolve_destination(localpart, domain_name, True)
-    destination = [*destination, *wildcard_senders] if destination else [*wildcard_senders]
-    return flask.jsonify(",".join(destination)) if destination else flask.abort(404)
+    localpart = localpart[:next((i for i, ch in enumerate(localpart) if ch in flask.current_app.config.get('RECIPIENT_DELIMITER')), None)]
+    destinations = set(models.Email.resolve_destination(localpart, domain_name, True) or [])
+    destinations.update(wildcard_senders)
+    destinations.update(i[0] for i in models.User.query.filter_by(allow_spoofing=True).with_entities(models.User.email).all())
+    if destinations:
+        return flask.jsonify(",".join(idna_encode(destinations)))
+    return flask.abort(404)
 
 @internal.route("/postfix/sender/rate/<path:sender>")
 def postfix_sender_rate(sender):
     """ Rate limit outbound emails per sender login
     """
+    if sender in flask.current_app.config['MESSAGE_RATELIMIT_EXEMPTION']:
+        flask.abort(404)
     user = models.User.get(sender) or flask.abort(404)
     return flask.abort(404) if user.sender_limiter.hit() else flask.jsonify("450 4.2.1 You are sending too many emails too fast.")
 
-@internal.route("/postfix/sender/access/<path:sender>")
-def postfix_sender_access(sender):
-    """ Simply reject any sender that pretends to be from a local domain
-    """
-    if not is_void_address(sender):
-        localpart, domain_name = models.Email.resolve_domain(sender)
-        return flask.jsonify("REJECT") if models.Domain.query.get(domain_name) else flask.abort(404)
-    else:
-        return flask.abort(404)
-
-
-def is_void_address(email):
-    '''True if the email is void (null) email address.
-    '''
-    if email.startswith('<') and email.endswith('>'):
-        email = email[1:-1]
-    # Some MTAs use things like '<MAILER-DAEMON>' instead of '<>'; so let's
-    # consider void any such thing.
-    return '@' not in email
+# idna encode domain part of each address in list of addresses
+def idna_encode(addresses):
+    return [
+        f"{localpart}@{idna.encode(domain).decode('ascii')}"
+        for (localpart, domain) in
+        (address.rsplit("@", 1) for address in addresses)
+    ]

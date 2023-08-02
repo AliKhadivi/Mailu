@@ -1,29 +1,22 @@
-ARG DISTRO=alpine:3.14.2
-FROM $DISTRO
-# python3 shared with most images
-RUN apk add --no-cache \
-    python3 py3-pip git bash py3-multidict py3-yarl \
-  && pip3 install --upgrade pip
+# syntax=docker/dockerfile-upstream:1.4.3
 
-# Shared layer between nginx, dovecot, postfix, postgresql, rspamd, unbound, rainloop, roundcube
-RUN pip3 install socrate==0.2.0
+# postfix image
+FROM base
 
-# Shared layer between dovecot and postfix
-RUN pip3 install "podop>0.2.5"
+ARG VERSION=local
+LABEL version=$VERSION
 
-# Image specific layers under this line
-RUN apk add --no-cache --virtual .build-deps gcc musl-dev python3-dev
-RUN pip3 install --no-binary :all: postfix-mta-sts-resolver==1.0.1
-RUN apk del .build-deps gcc musl-dev python3-dev
+RUN set -euxo pipefail \
+  ; apk add --no-cache cyrus-sasl-login postfix postfix-pcre logrotate
 
-RUN apk add --no-cache postfix postfix-pcre cyrus-sasl-login
+COPY conf/ /conf/
+COPY start.py /
 
-COPY conf /conf
-COPY start.py /start.py
+RUN echo $VERSION >/version
 
-EXPOSE 25/tcp 10025/tcp
+#EXPOSE 25/tcp 10025/tcp
+HEALTHCHECK --start-period=30s CMD ! /usr/libexec/postfix/master -t
+
 VOLUME ["/queue"]
 
 CMD /start.py
-
-HEALTHCHECK --start-period=350s CMD echo QUIT|nc localhost 25|grep "220 .* ESMTP Postfix"

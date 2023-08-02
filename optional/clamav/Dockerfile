@@ -1,19 +1,22 @@
-ARG DISTRO=alpine:3.14.2
-FROM $DISTRO
-# python3 shared with most images
-RUN apk add --no-cache \
-    python3 py3-pip bash \
-  && pip3 install --upgrade pip
-# Image specific layers under this line
-RUN apk add --no-cache clamav rsyslog wget clamav-libunrar
+# syntax=docker/dockerfile-upstream:1.4.3
 
-COPY conf /etc/clamav
-COPY start.py /start.py
-COPY health.sh /health.sh
+# clamav image
+FROM base
 
-EXPOSE 3310/tcp
+ARG VERSION=local
+LABEL version=$VERSION
+
+RUN set -euxo pipefail \
+  ; apk add --no-cache clamav clamav-libunrar rsyslog wget
+
+COPY conf/ /etc/clamav/
+COPY start.py /
+
+RUN echo $VERSION >/version
+
+#EXPOSE 3310/tcp
+HEALTHCHECK CMD kill -0 `cat /run/clamd.pid` && kill -0 `cat /run/freshclam.pid`
+
 VOLUME ["/data"]
 
 CMD /start.py
-
-HEALTHCHECK --start-period=350s CMD /health.sh

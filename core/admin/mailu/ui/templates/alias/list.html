@@ -13,10 +13,10 @@
 {%- endblock %}
 
 {%- block content %}
-{%- call macros.table() %}
+{%- call macros.table(order='[[1,"asc"]]') %}
 <thead>
   <tr>
-    <th>{% trans %}Actions{% endtrans %}</th>
+    <th data-orderable="false">{% trans %}Actions{% endtrans %}</th>
     <th>{% trans %}Email{% endtrans %}</th>
     <th>{% trans %}Destination{% endtrans %}</th>
     <th>{% trans %}Comment{% endtrans %}</th>
@@ -28,14 +28,14 @@
   {%- for alias in domain.aliases %}
   <tr>
     <td>
-      <a href="{{ url_for('.alias_edit', alias=alias.email) }}" title="{% trans %}Edit{% endtrans %}"><i class="fa fa-pencil"></i></a>&nbsp;
+      <a href="{{ url_for('.alias_edit', alias=alias.email) }}" title="{% trans %}Edit{% endtrans %}"><i class="fa fa-pencil-alt"></i></a>&nbsp;
       <a href="{{ url_for('.alias_delete', alias=alias.email) }}" title="{% trans %}Delete{% endtrans %}"><i class="fa fa-trash"></i></a>
     </td>
     <td>{{ alias }}</td>
     <td>{{ alias.destination|join(', ') or '-' }}</td>
     <td>{{ alias.comment or '' }}</td>
-    <td>{{ alias.created_at }}</td>
-    <td>{{ alias.updated_at or '' }}</td>
+    <td data-sort="{{ alias.created_at or '0000-00-00' }}">{{ alias.created_at | format_date }}</td>
+    <td data-sort="{{ alias.updated_at or '0000-00-00' }}">{{ alias.updated_at | format_date }}</td>
   </tr>
   {%- endfor %}
 </tbody>

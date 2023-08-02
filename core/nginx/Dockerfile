@@ -1,27 +1,35 @@
-ARG DISTRO=alpine:3.14.2
-FROM $DISTRO
-# python3 shared with most images
-RUN apk add --no-cache \
-    python3 py3-pip git bash py3-multidict \
-  && pip3 install --upgrade pip
+# syntax=docker/dockerfile-upstream:1.4.3
 
-# Shared layer between nginx, dovecot, postfix, postgresql, rspamd, unbound, rainloop, roundcube
-RUN pip3 install socrate==0.2.0
+# build static assets (intermediate)
+FROM base as static
 
-# Image specific layers under this line
-RUN apk add --no-cache certbot nginx nginx-mod-mail openssl curl \
- && pip3 install watchdog
+COPY static/ /static/
 
-COPY conf /conf
-COPY static /static
+RUN set -euxo pipefail \
+  ; gzip -k9 /static/*.ico /static/*.txt \
+  ; chmod a+rX-w -R /static
+
+
+# nginx image
+FROM base
+
+ARG VERSION
+LABEL version=$VERSION
+
+RUN set -euxo pipefail \
+  ; apk add --no-cache certbot nginx nginx-mod-http-brotli nginx-mod-mail openssl dovecot-lua dovecot-pigeonhole-plugin dovecot-lmtpd dovecot-pop3d dovecot-submissiond
+
+COPY conf/ /conf/
+COPY --from=static /static/ /static/
 COPY *.py /
+COPY dovecot/proxy.conf dovecot/login.lua /dovecot_conf/
 
-RUN gzip -k9 /static/*.ico /static/*.txt
+RUN echo $VERSION >/version
 
-EXPOSE 80/tcp 443/tcp 110/tcp 143/tcp 465/tcp 587/tcp 993/tcp 995/tcp 25/tcp 10025/tcp 10143/tcp
-VOLUME ["/certs"]
-VOLUME ["/overrides"]
+EXPOSE 80/tcp 443/tcp 110/tcp 143/tcp 465/tcp 587/tcp 993/tcp 995/tcp 25/tcp 4190/tcp
+# EXPOSE 10025/tcp 10143/tcp 14190/tcp
+HEALTHCHECK --start-period=60s CMD curl -skfLo /dev/null http://127.0.0.1:10204/health && kill -0 `cat /run/dovecot/master.pid`
+
+VOLUME ["/certs", "/overrides"]
 
 CMD /start.py
-
-HEALTHCHECK CMD curl -k -f -L http://localhost/health || exit 1

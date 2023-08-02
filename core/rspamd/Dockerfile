@@ -1,25 +1,24 @@
-ARG DISTRO=alpine:3.14.2
-FROM $DISTRO
-# python3 shared with most images
-RUN apk add --no-cache \
-    python3 py3-pip git bash py3-multidict \
-  && pip3 install --upgrade pip
+# syntax=docker/dockerfile-upstream:1.4.3
 
-# Shared layer between nginx, dovecot, postfix, postgresql, rspamd, unbound, rainloop, roundcube
-RUN pip3 install socrate==0.2.0
+# rspamd image
+FROM base
 
-# Image specific layers under this line
-RUN apk add --no-cache rspamd rspamd-controller rspamd-proxy rspamd-fuzzy ca-certificates curl
+ARG VERSION=local
+LABEL version=$VERSION
 
-RUN mkdir /run/rspamd
+RUN set -euxo pipefail \
+  ; apk add --no-cache rspamd rspamd-controller rspamd-fuzzy rspamd-proxy \
+  ; mkdir /run/rspamd \
+  ; mkdir /overrides
 
-COPY conf/ /conf
-COPY start.py /start.py
+COPY conf/ /conf/
+COPY start.py /
 
-EXPOSE 11332/tcp 11334/tcp 11335/tcp
+RUN echo $VERSION >/version
+
+#EXPOSE 11332/tcp 11334/tcp 11335/tcp
+HEALTHCHECK --start-period=350s CMD curl -skfLo /dev/null http://localhost:11334/
 
 VOLUME ["/var/lib/rspamd"]
 
 CMD /start.py
-
-HEALTHCHECK --start-period=350s CMD curl -f -L http://localhost:11334/ || exit 1

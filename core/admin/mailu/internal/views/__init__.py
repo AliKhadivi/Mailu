@@ -1,3 +1,3 @@
 __all__ = [
-    'auth', 'postfix', 'dovecot', 'fetch'
+    'auth', 'autoconfig', 'postfix', 'dovecot', 'fetch', 'rspamd'
 ]

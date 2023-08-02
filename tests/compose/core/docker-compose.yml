@@ -15,7 +15,7 @@ services:
 
   # Core services
   front:
-    image: ${DOCKER_ORG:-mailu}/${DOCKER_PREFIX:-}nginx:${MAILU_VERSION:-master}
+    image: ${DOCKER_ORG:-mailu}/${DOCKER_PREFIX:-}nginx:${MAILU_VERSION:-local}
     restart: always
     env_file: mailu.env
     logging:
@@ -30,21 +30,25 @@ services:
       - "127.0.0.1:995:995"
       - "127.0.0.1:143:143"
       - "127.0.0.1:993:993"
+      - "127.0.0.1:4190:4190"
     volumes:
       - "/mailu/certs:/certs"
 
   admin:
-    image: ${DOCKER_ORG:-mailu}/${DOCKER_PREFIX:-}admin:${MAILU_VERSION:-master}
+    image: ${DOCKER_ORG:-mailu}/${DOCKER_PREFIX:-}admin:${MAILU_VERSION:-local}
     restart: always
     env_file: mailu.env
     volumes:
       - "/mailu/data:/data"
       - "/mailu/dkim:/dkim"
+    dns:
+      - 192.168.203.254
     depends_on:
       - redis
+      - resolver
 
   imap:
-    image: ${DOCKER_ORG:-mailu}/${DOCKER_PREFIX:-}dovecot:${MAILU_VERSION:-master}
+    image: ${DOCKER_ORG:-mailu}/${DOCKER_PREFIX:-}dovecot:${MAILU_VERSION:-local}
     restart: always
     env_file: mailu.env
     volumes:
@@ -54,7 +58,7 @@ services:
       - front
 
   smtp:
-    image: ${DOCKER_ORG:-mailu}/${DOCKER_PREFIX:-}postfix:${MAILU_VERSION:-master}
+    image: ${DOCKER_ORG:-mailu}/${DOCKER_PREFIX:-}postfix:${MAILU_VERSION:-local}
     restart: always
     env_file: mailu.env
     volumes:
@@ -62,10 +66,20 @@ services:
     depends_on:
       - front
 
+  oletools:
+    image: ${DOCKER_ORG:-mailu}/${DOCKER_PREFIX:-}oletools:${MAILU_VERSION:-local}
+    hostname: oletools
+    restart: always
+    networks:
+      - noinet
+
   antispam:
-    image: ${DOCKER_ORG:-mailu}/${DOCKER_PREFIX:-}rspamd:${MAILU_VERSION:-master}
+    image: ${DOCKER_ORG:-mailu}/${DOCKER_PREFIX:-}rspamd:${MAILU_VERSION:-local}
     restart: always
     env_file: mailu.env
+    networks:
+      - default
+      - noinet
     volumes:
       - "/mailu/filter:/var/lib/rspamd"
       - "/mailu/dkim:/dkim"
@@ -75,7 +89,13 @@ services:
 
   # Optional services
 
-
+  resolver:
+    image: ${DOCKER_ORG:-mailu}/${DOCKER_PREFIX:-}unbound:${MAILU_VERSION:-local}
+    env_file: mailu.env
+    restart: always
+    networks:
+      default:
+        ipv4_address: 192.168.203.254
 
   # Webmail
 
@@ -87,3 +107,6 @@ networks:
       driver: default
       config:
         - subnet: 192.168.203.0/24
+  noinet:
+    driver: bridge
+    internal: true
